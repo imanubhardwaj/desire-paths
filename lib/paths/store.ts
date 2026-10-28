@@ -20,8 +20,10 @@ export interface PathsStore {
 let store: PathsStore | undefined;
 
 export function getStore(): PathsStore {
-  store ??=
-    process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN ? redisStore() : fileStore();
+  // Vercel's Upstash integration injects KV_REST_API_*; a manual setup uses UPSTASH_REDIS_REST_*.
+  const url = process.env.UPSTASH_REDIS_REST_URL ?? process.env.KV_REST_API_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN ?? process.env.KV_REST_API_TOKEN;
+  store ??= url && token ? redisStore(url, token) : fileStore();
   return store;
 }
 
@@ -59,8 +61,8 @@ if first then return -1 end
 return n
 `;
 
-function redisStore(): PathsStore {
-  const redis = Redis.fromEnv();
+function redisStore(url: string, token: string): PathsStore {
+  const redis = new Redis({ url, token });
   const weekKey = (w: number) => `paths:week:${w}`;
 
   return {
