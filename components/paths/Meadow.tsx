@@ -12,6 +12,7 @@ const ACTIVE_R = 85;
 const APPROACH_R = 46;
 const PICK_R = 60;
 const FLUSH_MS = 30_000;
+const MIN_FLUSH_GAP_MS = 10_000;
 const STUCK_MS = 600;
 const GHOST_SPEED = 3;
 const GHOST_REST = 12; // samples a ghost waits before walking again
@@ -213,9 +214,19 @@ export function Meadow() {
 
     // Hand footsteps to the ground. Each send carries only cells not yet sent,
     // plus the whole walk so far (the server keeps the latest walk per visit).
-    const flush = () => {
+    // Debounced: a send only happens when there is something new (cells or
+    // path points), and at most one per MIN_FLUSH_GAP_MS. Leaving the page
+    // (`final`) bypasses the gap, since there won't be another chance.
+    let lastFlushAt = -Infinity;
+    let lastSentPathLen = 0;
+    const flush = (final = false) => {
       if (readOptOut() || session.seen.size < LIMITS.minCells) return;
+      if (session.pending.size === 0 && session.path.length === lastSentPathLen) return;
       if (session.pending.size === 0 && session.path.length < 2) return;
+      const now = performance.now();
+      if (!final && now - lastFlushAt < MIN_FLUSH_GAP_MS) return;
+      lastFlushAt = now;
+      lastSentPathLen = session.path.length;
       const cells = [...session.pending].slice(0, LIMITS.maxCellsPerDeposit);
       const body = JSON.stringify({ v: 1, id: session.id, cells, path: session.path });
       const sent = () => cells.forEach((c) => session.pending.delete(c));
@@ -227,12 +238,13 @@ export function Meadow() {
           .catch(() => {});
       }
     };
-    const flushTimer = window.setInterval(flush, FLUSH_MS);
+    const flushTimer = window.setInterval(() => flush(), FLUSH_MS);
     const onVisibility = () => {
-      if (document.hidden) flush();
+      if (document.hidden) flush(true);
     };
+    const onPageHide = () => flush(true);
     document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("pagehide", flush);
+    window.addEventListener("pagehide", onPageHide);
 
     const step = (dt: number, now: number) => {
       let vx = 0;
@@ -284,7 +296,11 @@ export function Meadow() {
 
       if (now - session.lastSample >= PATH_MS && session.path.length < LIMITS.maxPathPoints) {
         session.lastSample = now;
-        session.path.push([Math.round(me.x), Math.round(me.y)]);
+        const x = Math.round(me.x);
+        const y = Math.round(me.y);
+        const prev = session.path[session.path.length - 1];
+        // Standing still adds nothing worth uploading.
+        if (!prev || prev[0] !== x || prev[1] !== y) session.path.push([x, y]);
       }
     };
 
@@ -355,7 +371,7 @@ export function Meadow() {
       cancelled = true;
       cancelAnimationFrame(raf);
       clearInterval(flushTimer);
-      flush();
+      flush(true);
       ground.destroy();
       window.removeEventListener("resize", resize);
       overlay.removeEventListener("pointerdown", onPointerDown);
@@ -366,7 +382,7 @@ export function Meadow() {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
       document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("pagehide", onPageHide);
     };
   }, []);
 
